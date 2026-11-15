@@ -35,7 +35,7 @@ jobs:
         if [ -f *.xcworkspace ]; then
           WORKSPACE=$(ls *.xcworkspace | head -n 1)
           xcodebuild -workspace "$WORKSPACE" \
-            -scheme "YourSchemeName" \
+            -scheme "GoutouJunshi" \
             -configuration Release \
             -archivePath build/App.xcarchive \
             CODE_SIGN_IDENTITY="" \
@@ -45,7 +45,7 @@ jobs:
         else
           PROJECT=$(ls *.xcodeproj | head -n 1)
           xcodebuild -project "$PROJECT" \
-            -scheme "YourSchemeName" \
+            -scheme "GoutouJunshi" \
             -configuration Release \
             -archivePath build/App.xcarchive \
             CODE_SIGN_IDENTITY="" \
