@@ -49,8 +49,11 @@ jobs:
         cd integrations/jev_ios
 
         # 查找 workspace 或 project 文件
-        if [ -f *.xcworkspace ]; then
-          WORKSPACE=$(ls *.xcworkspace | head -n 1)
+        WORKSPACE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+        PROJECT=$(find . -maxdepth 1 -name "*.xcodeproj" | head -n 1)
+
+        if [ -n "$WORKSPACE" ]; then
+          echo "使用 workspace: $WORKSPACE"
           xcodebuild -workspace "$WORKSPACE" \
             -scheme "GoutouJunshi" \
             -configuration Release \
@@ -59,8 +62,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             archive
-        else
-          PROJECT=$(ls *.xcodeproj | head -n 1)
+        elif [ -n "$PROJECT" ]; then
+          echo "使用 project: $PROJECT"
           xcodebuild -project "$PROJECT" \
             -scheme "GoutouJunshi" \
             -configuration Release \
@@ -69,6 +72,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             archive
+        else
+          echo "错误：找不到 .xcworkspace 或 .xcodeproj 文件"
+          exit 1
         fi
 
         # 导出为 IPA
