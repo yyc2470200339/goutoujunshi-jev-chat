@@ -11,7 +11,7 @@ jobs:
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 设置 Xcode 版本
       uses: maxim-lobanov/setup-xcode@v1
@@ -26,6 +26,23 @@ jobs:
           pod install
         fi
         # 如果使用 Swift Package Manager，Xcode 会自动处理
+
+    - name: 创建 ExportOptions.plist
+      run: |
+        cat > integrations/jev_ios/ExportOptions.plist <<EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>method</key>
+          <string>development</string>
+          <key>compileBitcode</key>
+          <false/>
+          <key>signingStyle</key>
+          <string>manual</string>
+        </dict>
+        </plist>
+        EOF
 
     - name: 构建 IPA（无签名）
       run: |
@@ -60,25 +77,8 @@ jobs:
           -exportPath build \
           -exportOptionsPlist ExportOptions.plist
 
-    - name: 创建 ExportOptions.plist
-      run: |
-        cat > integrations/jev_ios/ExportOptions.plist <<EOF
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>method</key>
-          <string>development</string>
-          <key>compileBitcode</key>
-          <false/>
-          <key>signingStyle</key>
-          <string>manual</string>
-        </dict>
-        </plist>
-        EOF
-
     - name: 上传 IPA 文件
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: jev-ios-app
         path: integrations/jev_ios/build/*.ipa
