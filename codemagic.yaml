@@ -1,0 +1,73 @@
+workflows:
+  ios-workflow:
+    name: iOS Workflow
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    
+    environment:
+      ios_signing:
+        distribution_type: ad_hoc
+        bundle_identifier: ai.goutoujunshi.chatios
+      
+      vars:
+        XCODE_WORKSPACE: "integrations/jev_ios/GoutouJunshi.xcodeproj"
+        XCODE_SCHEME: "GoutouJunshi"
+        BUNDLE_ID: "ai.goutoujunshi.chatios"
+        APP_GROUP: "group.ai.goutoujunshi.chatios"
+      
+      xcode: latest
+      cocoapods: default
+    
+    scripts:
+      - name: Set up code signing settings on Xcode project
+        script: |
+          # 进入 iOS 项目目录
+          cd integrations/jev_ios
+          
+          # 创建本地签名配置（如果需要）
+          if [ -n "$DEVELOPMENT_TEAM" ]; then
+            cat > Signing.local.xcconfig << EOF
+          DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM
+          GOUTOU_BUNDLE_ID = $BUNDLE_ID
+          GOUTOU_APP_GROUP = $APP_GROUP
+          EOF
+          fi
+      
+      - name: Install dependencies (if any)
+        script: |
+          cd integrations/jev_ios
+          # 如果有 CocoaPods
+          if [ -f "Podfile" ]; then
+            pod install
+          fi
+      
+      - name: Build ipa for distribution
+        script: |
+          cd integrations/jev_ios
+          
+          # 使用 Xcode 构建
+          xcodebuild archive \
+            -project GoutouJunshi.xcodeproj \
+            -scheme GoutouJunshi \
+            -configuration Release \
+            -archivePath build/GoutouJunshi.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+          
+          # 导出 IPA
+          xcodebuild -exportArchive \
+            -archivePath build/GoutouJunshi.xcarchive \
+            -exportPath build/output \
+            -exportOptionsPlist ExportOptions.plist
+    
+    artifacts:
+      - integrations/jev_ios/build/output/*.ipa
+    
+    publishing:
+      email:
+        recipients:
+          - user@example.com
+        notify:
+          success: true
+          failure: true
