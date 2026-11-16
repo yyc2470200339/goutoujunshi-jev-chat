@@ -15,66 +15,63 @@ workflows:
       cocoapods: default
     
     scripts:
-      - name: Set up code signing settings on Xcode project
-        script: |
-          # 进入 iOS 项目目录
-          cd integrations/jev_ios
-          
-          # 创建本地签名配置（如果需要）
-          if [ -n "$DEVELOPMENT_TEAM" ]; then
-            cat > Signing.local.xcconfig << EOF
-          DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM
-          GOUTOU_BUNDLE_ID = $BUNDLE_ID
-          GOUTOU_APP_GROUP = $APP_GROUP
-          EOF
-          fi
-      
-      - name: Install dependencies (if any)
+      - name: Install dependencies
         script: |
           cd integrations/jev_ios
-          # 如果有 CocoaPods
           if [ -f "Podfile" ]; then
             pod install
           fi
       
-      - name: Build ipa for distribution
+      - name: Build IPA
         script: |
           cd integrations/jev_ios
           
-          # 使用 Xcode 构建（无签名）
-          xcodebuild archive \
+          echo "🔨 Building for simulator (no signing required)..."
+          
+          # 直接构建 App Bundle（不需要签名）
+          xcodebuild build \
             -project GoutouJunshi.xcodeproj \
             -scheme GoutouJunshi \
             -configuration Release \
+            -sdk iphoneos \
             -derivedDataPath build/derived \
-            -archivePath build/GoutouJunshi.xcarchive \
-            -allowProvisioningUpdates \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO || true
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO
           
-          # 创建临时导出配置（无签名）
-          cat > ExportOptions.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>method</key>
-              <string>ad-hoc</string>
-          </dict>
-          </plist>
-          EOF
+          echo "✓ Build completed"
           
-          # 导出 IPA
-          xcodebuild -exportArchive \
-            -archivePath build/GoutouJunshi.xcarchive \
-            -exportPath build/output \
-            -exportOptionsPlist ExportOptions.plist \
-            -allowProvisioningUpdates || true
+          # 查找生成的 .app 文件
+          APP_PATH=$(find build/derived -name "GoutouJunshi.app" -path "*/Release-iphoneos/*" | head -1)
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ App not found!"
+            find build/derived -name "*.app"
+            exit 1
+          fi
+          
+          echo "✓ Found app at: $APP_PATH"
+          
+          # 创建 Payload 目录结构
+          mkdir -p build/output/Payload
+          cp -R "$APP_PATH" build/output/Payload/
+          
+          # 打包为 IPA
+          cd build/output
+          zip -r GoutouJunshi.ipa Payload
+          rm -rf Payload
+          
+          echo "✓ IPA created: $(ls -lh GoutouJunshi.ipa)"
+          
+          # 验证 IPA
+          if [ -f "GoutouJunshi.ipa" ]; then
+            echo "✅ IPA file ready for download"
+            unzip -l GoutouJunshi.ipa | head -20
+          else
+            echo "❌ IPA creation failed!"
+            exit 1
+          fi
     
     artifacts:
       - integrations/jev_ios/build/output/*.ipa
