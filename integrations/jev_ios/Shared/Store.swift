@@ -34,17 +34,33 @@ struct KeyboardSession: Codable {
 
 final class GoutouStore {
     static var group: String { Bundle.main.object(forInfoDictionaryKey: "GoutouAppGroup") as? String ?? "group.ai.goutoujunshi.chatios" }
+
+    /// 共享容器是否真的可用。免费个人团队无法签 App Group entitlement，
+    /// 此时各进程降级为本地存储：键盘自足（读剪贴板→核对→分析），
+    /// 配置与密钥通过「复制配置给键盘 / 从剪贴板导入配置」传递。
+    /// 只求值一次；containerURL 在无授权时每次调用都会向系统日志输出
+    /// "client is not entitled" 噪音。
+    static let sharedContainerAvailable: Bool = FileManager.default
+        .containerURL(forSecurityApplicationGroupIdentifier: group) != nil
+
     private let defaults: UserDefaults
     private let container: URL
 
     init() throws {
         #if os(iOS)
-        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.group),
-              let defaults = UserDefaults(suiteName: Self.group) else {
-            throw GoutouError.invalid("共享配置未连接：请在 Xcode 为 App 与键盘配置相同 App Group 和开发者 Team")
+        if let groupDefaults = UserDefaults(suiteName: Self.group),
+           Self.sharedContainerAvailable,
+           let groupContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.group) {
+            container = groupContainer
+            defaults = groupDefaults
+        } else {
+            // 降级：进程私有目录。keyboard-session 等本进程暂存照常工作；
+            // handoff / capture 信箱跨进程不可达，调用方自行检测 sharedContainerAvailable。
+            let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            container = base.appendingPathComponent("goutou-local-store", isDirectory: true)
+            try? FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+            defaults = .standard
         }
-        self.container = container
-        self.defaults = defaults
         #else
         container = FileManager.default.temporaryDirectory.appendingPathComponent("goutou-ios-core-tests")
         defaults = UserDefaults(suiteName: "ai.goutoujunshi.core-tests")!
@@ -190,48 +206,61 @@ final class GoutouStore {
 #if !GOUTOU_CAPTURE
 enum CredentialVault {
     static let services = ["deepseek", "openrouter", "jev"]
+
     #if os(iOS)
-    // 改用 App Groups + UserDefaults 存储 API Keys（替代 Keychain）
-    // 适用于无签名 IPA，避免 Keychain 权限错误 -34018
-    private static func defaults() throws -> UserDefaults {
-        guard let defaults = UserDefaults(suiteName: GoutouStore.group) else {
-            throw GoutouError.invalid("共享配置未连接：请检查 App Group 配置")
+    // 纯本地明文JSON存储方案 - 适用于无证书线上编译的情况
+    private static func credentialsFilePath() -> URL {
+        // 优先使用共享容器,不可用时降级到本地目录
+        let base: URL
+        if GoutouStore.sharedContainerAvailable,
+           let groupContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: GoutouStore.group) {
+            base = groupContainer
+        } else {
+            // 降级到App/键盘扩展各自的Documents目录
+            base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         }
-        return defaults
+        return base.appendingPathComponent("goutou-credentials.json")
     }
-    
-    private static func key(for name: String) -> String {
-        "credential.\(name)"
+
+    private static func loadCredentials() -> [String: String] {
+        let path = credentialsFilePath()
+        guard FileManager.default.fileExists(atPath: path.path),
+              let data = try? Data(contentsOf: path),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return dict
     }
-    
+
+    private static func saveCredentials(_ dict: [String: String]) throws {
+        let path = credentialsFilePath()
+        let data = try JSONEncoder().encode(dict)
+        try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
+                                                  withIntermediateDirectories: true)
+        try data.write(to: path, options: [.atomic])
+    }
+
     static func read(_ name: String) throws -> String {
-        guard services.contains(name) else {
-            throw GoutouError.invalid("不支持的服务类型")
-        }
-        let defaults = try defaults()
-        return defaults.string(forKey: key(for: name)) ?? ""
+        guard services.contains(name) else { throw GoutouError.invalid("未知密钥服务") }
+        let credentials = loadCredentials()
+        return credentials[name] ?? ""
     }
-    
+
     static func write(_ value: String, name: String) throws {
+        guard services.contains(name) else { throw GoutouError.invalid("未知密钥服务") }
         let value = value.trimmed
-        guard !value.isEmpty, value.count <= 1024 else {
-            throw GoutouError.invalid("请输入有效的 API Key")
-        }
-        guard services.contains(name) else {
-            throw GoutouError.invalid("不支持的服务类型")
-        }
-        let defaults = try defaults()
-        defaults.set(value, forKey: key(for: name))
-        defaults.synchronize()
+        guard !value.isEmpty, value.count <= 1024 else { throw GoutouError.invalid("请输入有效的 API Key") }
+
+        var credentials = loadCredentials()
+        credentials[name] = value
+        try saveCredentials(credentials)
     }
-    
+
     static func delete(_ name: String) throws {
-        guard services.contains(name) else {
-            throw GoutouError.invalid("不支持的服务类型")
-        }
-        let defaults = try defaults()
-        defaults.removeObject(forKey: key(for: name))
-        defaults.synchronize()
+        guard services.contains(name) else { throw GoutouError.invalid("未知密钥服务") }
+        var credentials = loadCredentials()
+        credentials.removeValue(forKey: name)
+        try saveCredentials(credentials)
     }
     #else
     static func read(_ name: String) throws -> String { "" }
@@ -241,6 +270,43 @@ enum CredentialVault {
 
     static func load() throws -> ProviderSecrets {
         try ProviderSecrets(deepseek: read("deepseek"), openrouter: read("openrouter"), jev: read("jev"))
+    }
+}
+
+/// 跨进程配置搬运包：App 端「复制配置给键盘」导出到剪贴板，
+/// 键盘端「从剪贴板导入配置」解码后存入本进程 store 与私有钥匙串。
+/// 仅在无共享容器（免费个人团队签名）时使用这条通道。
+enum ConfigTransfer {
+    static let prefix = "GOUTOU-CONFIG-1:"
+
+    struct Payload: Codable, Equatable {
+        var config: AppConfig
+        var relationship: Relationship
+        var deepseek: String
+        var openrouter: String
+        var jev: String
+    }
+
+    static func export(_ payload: Payload) throws -> String {
+        try payload.config.validate()
+        try payload.relationship.validate()
+        let data = try JSONEncoder().encode(payload)
+        return prefix + data.base64EncodedString()
+    }
+
+    static func `import`(_ text: String) throws -> Payload {
+        guard text.hasPrefix(prefix) else { throw GoutouError.invalid("剪贴板内容不是狗头军师配置包") }
+        guard let data = Data(base64Encoded: String(text.dropFirst(prefix.count))) else {
+            throw GoutouError.invalid("配置包已损坏，请在 App 里重新复制")
+        }
+        let payload = try JSONDecoder().decode(Payload.self, from: data)
+        try payload.config.validate()
+        try payload.relationship.validate()
+        for name in CredentialVault.services {
+            let value = [payload.deepseek, payload.openrouter, payload.jev][CredentialVault.services.firstIndex(of: name)!]
+            if !value.isEmpty && value.count > 1024 { throw GoutouError.invalid("配置包里的 \(name) Key 无效") }
+        }
+        return payload
     }
 }
 #endif
